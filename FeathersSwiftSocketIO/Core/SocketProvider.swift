@@ -46,7 +46,7 @@ public final class SocketProvider: Provider {
             guard let vSelf = self else { return }
             guard let vApp = app else { return }
             guard let accessToken = vApp.authenticationStorage.accessToken else { return }
-            vSelf.emit("authenticate", with: [
+            vSelf.request("authenticate", with: [
                 "strategy": vApp.authenticationConfiguration.jwtStrategy,
                 "accessToken": accessToken
                 ])
@@ -67,41 +67,36 @@ public final class SocketProvider: Provider {
     }
     
     public func request(endpoint: Endpoint) -> SignalProducer<Response, AnyFeathersError> {
-        let method = endpoint.method.socketRequestPath
-        let service = endpoint.path
-        var emitRequest: OnAckCallback
-        
-        switch endpoint.method {
-        case let .find(query):
-            emitRequest = client.emitWithAck(method, service, query?.serialize() ?? [:])
-        case let .get(id, query):
-            emitRequest = client.emitWithAck(method, service, id, query?.serialize() ?? [:])
-        case let .create(data, query):
-            emitRequest = client.emitWithAck(method, service, data, query?.serialize() ?? [:])
-        case let .update(id, data, query),
-             let .patch(id, data, query):
-            if let realId = id {
-                emitRequest = client.emitWithAck(method, service, realId, data, query?.serialize() ?? [:])
-            } else {
-                emitRequest = client.emitWithAck(method, service, data, query?.serialize() ?? [:])
-            }
-        case let .remove(id, query):
-            if let realId = id {
-                emitRequest = client.emitWithAck(method, service, realId, query?.serialize() ?? [:])
-            } else {
-                emitRequest = client.emitWithAck(method, service, query?.serialize() ?? [:])
-            }
+        do {
+            let socketData = try endpoint.method.socketData.compactMap{( try $0?.socketRepresentation() )}
+            let method = endpoint.method.socketRequestPath
+            let service = endpoint.path
+            
+            var reqData: Array<Any> = [
+                service
+            ]
+            reqData.append(contentsOf: socketData as [Any])
+            
+            let emitRequest = client.emitWithAck(method, with: reqData)
+            
+            return emit(emitRequest)
+        } catch {
+            print("Couldn't convert socketData", error)
+            return SignalProducer(error: AnyFeathersError(FeathersNetworkError.unknown))
         }
-        
-        return emit(emitRequest)
+    }
+    
+    private func request(_ method: String, with data: SocketData) -> SignalProducer<Response, AnyFeathersError> {
+        let emitReq: OnAckCallback = self.client.emitWithAck(method, data)
+        return emit(emitReq)
     }
     
     public func authenticate(_ path: String, credentials: [String : Any]) -> SignalProducer<Response, AnyFeathersError> {
-        return emit("authenticate", with: credentials)
+        return request("authenticate", with: credentials)
     }
     
     public func logout(path: String) -> SignalProducer<Response, AnyFeathersError> {
-        return emit("logout", with: [])
+        return request("logout", with: [])
     }
     
     /// Emit data to a given path.
@@ -117,20 +112,7 @@ public final class SocketProvider: Provider {
                 return
             }
             
-            if vSelf.client.status == .connecting {
-                vSelf.client.once("connect") { _,_  in
-                    emitReq.timingOut(after: vSelf.timeout) { data in
-                        let result = vSelf.handleResponseData(data: data)
-                        if let error = result.error {
-                            observer.send(error: error)
-                        } else if let response = result.value {
-                            observer.send(value: response)
-                        } else {
-                            observer.send(error: AnyFeathersError(FeathersNetworkError.unknown))
-                        }
-                    }
-                }
-            } else {
+            let sendEmit: () -> () = {
                 emitReq.timingOut(after: vSelf.timeout) { data in
                     let result = vSelf.handleResponseData(data: data)
                     if let error = result.error {
@@ -143,60 +125,14 @@ public final class SocketProvider: Provider {
                 }
             }
             
-        }
-    }
-    
-    /// Emit data to a given path.
-    ///
-    /// - Parameters:
-    ///   - path: Path to emit on.
-    ///   - data: Data to emit.
-    ///   - completion: Completion callback.
-    private func emit(_ method: String, to serviceName: String?, with data: SocketData) -> SignalProducer<Response, AnyFeathersError> {
-        return SignalProducer { [weak self] observer, disposable in
-            guard let vSelf = self else {
-                observer.sendInterrupted()
-                return
-            }
-            var emitReq: OnAckCallback
-            if let service = serviceName {
-                emitReq = vSelf.client.emitWithAck(method, service, data)
-            } else {
-                emitReq = vSelf.client.emitWithAck(method, data)
-            }
-            
             if vSelf.client.status == .connecting {
-                vSelf.client.once("connect") { _,_  in
-                    emitReq.timingOut(after: vSelf.timeout) { data in
-                        let result = vSelf.handleResponseData(data: data)
-                        if let error = result.error {
-                            observer.send(error: error)
-                        } else if let response = result.value {
-                            observer.send(value: response)
-                        } else {
-                            observer.send(error: AnyFeathersError(FeathersNetworkError.unknown))
-                        }
-                    }
-                }
+                vSelf.client.once(clientEvent: .connect) { (_, _) in sendEmit() }
             } else {
-                emitReq.timingOut(after: vSelf.timeout) { data in
-                    let result = vSelf.handleResponseData(data: data)
-                    if let error = result.error {
-                        observer.send(error: error)
-                    } else if let response = result.value {
-                        observer.send(value: response)
-                    } else {
-                        observer.send(error: AnyFeathersError(FeathersNetworkError.unknown))
-                    }
-                }
+                sendEmit()
             }
-            
         }
     }
     
-    private func emit(_ method: String, with data: SocketData) -> SignalProducer<Response, AnyFeathersError> {
-        return emit(method, to: nil, with: data)
-    }
     
     /// Parse and handle socket response data.
     ///
