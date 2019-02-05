@@ -14,19 +14,19 @@ import Feathers
 import ReactiveSwift
 
 public final class SocketProvider: Provider {
-    
+
     public let baseURL: URL
-    
+
     public var supportsRealtimeEvents: Bool {
         return true
     }
-    
+
     /// SocketIO client.
     private let client: SocketIOClient
-    
+
     /// Socket timeout for `connect` and all emits.
     private let timeout: Double
-    
+
     /// Socket provider initializer.
     ///
     /// - Parameters:
@@ -39,7 +39,7 @@ public final class SocketProvider: Provider {
         self.timeout = timeout
         client = manager.defaultSocket
     }
-    
+
     public func setup(app: Feathers) {
         // Attempt to authenticate using a previously stored token once the client connects.
         client.once("connect") { [weak app = app, weak self] data, ack in
@@ -65,40 +65,40 @@ public final class SocketProvider: Provider {
             print("feathers socket failed to connect")
         }
     }
-    
+
     public func request(endpoint: Endpoint) -> SignalProducer<Response, AnyFeathersError> {
         do {
             let socketData = try endpoint.method.socketData.compactMap{( try $0?.socketRepresentation() )}
             let method = endpoint.method.socketRequestPath
             let service = endpoint.path
-            
+
             var reqData: Array<Any> = [
                 service
             ]
             reqData.append(contentsOf: socketData as [Any])
-            
+
             let emitRequest = client.emitWithAck(method, with: reqData)
-            
+
             return emit(emitRequest)
         } catch {
             print("Couldn't convert socketData", error)
             return SignalProducer(error: AnyFeathersError(FeathersNetworkError.unknown))
         }
     }
-    
+
     private func request(_ method: String, with data: SocketData) -> SignalProducer<Response, AnyFeathersError> {
         let emitReq: OnAckCallback = self.client.emitWithAck(method, data)
         return emit(emitReq)
     }
-    
+
     public func authenticate(_ path: String, credentials: [String : Any]) -> SignalProducer<Response, AnyFeathersError> {
         return request("authenticate", with: credentials)
     }
-    
+
     public func logout(path: String) -> SignalProducer<Response, AnyFeathersError> {
         return request("logout", with: [])
     }
-    
+
     /// Emit data to a given path.
     ///
     /// - Parameters:
@@ -111,7 +111,7 @@ public final class SocketProvider: Provider {
                 observer.sendInterrupted()
                 return
             }
-            
+
             let sendEmit: () -> () = {
                 emitReq.timingOut(after: vSelf.timeout) { data in
                     let result = vSelf.handleResponseData(data: data)
@@ -124,7 +124,7 @@ public final class SocketProvider: Provider {
                     }
                 }
             }
-            
+
             if vSelf.client.status == .connecting {
                 vSelf.client.once(clientEvent: .connect) { (_, _) in sendEmit() }
             } else {
@@ -132,8 +132,8 @@ public final class SocketProvider: Provider {
             }
         }
     }
-    
-    
+
+
     /// Parse and handle socket response data.
     ///
     /// - Parameter data: Socket response data.
@@ -153,7 +153,7 @@ public final class SocketProvider: Provider {
         }
         return .failure(AnyFeathersError(FeathersNetworkError.unknown))
     }
-    
+
     /// Parse pagination data if any.
     ///
     /// - Parameter data: Data to parse from.
@@ -167,9 +167,9 @@ public final class SocketProvider: Provider {
         }
         return Pagination(total: total, limit: limit, skip: skip)
     }
-    
+
     // MARK: - RealTimeProvider
-    
+
     public func on(event: String) -> Signal<[String: Any], NoError> {
         return Signal { [weak client = client] observer, lifetime in
             guard let vClient = client else {
@@ -186,7 +186,7 @@ public final class SocketProvider: Provider {
             lifetime += disposable
         }
     }
-    
+
     public func once(event: String) -> Signal<[String: Any], NoError> {
         return Signal { [weak client = client] observer, lifetime in
             guard let vClient = client else {
@@ -204,21 +204,21 @@ public final class SocketProvider: Provider {
             lifetime += disposable
         }
     }
-    
+
     public func off(event: String) {
         client.off(event)
     }
-    
+
     // MARK: - Deinit
-    
+
     deinit {
         client.disconnect()
     }
-    
+
 }
 
 fileprivate extension Service.Method {
-    
+
     fileprivate var socketRequestPath: String {
         switch self {
         case .find: return "find"
@@ -226,10 +226,10 @@ fileprivate extension Service.Method {
         case .create: return "create"
         case .update: return "update"
         case .patch: return "patch"
-        case .remove: return "removed"
+        case .remove: return "remove"
         }
     }
-    
+
     fileprivate var socketData: [SocketData?] {
         switch self {
         case .find(let query):
@@ -245,6 +245,5 @@ fileprivate extension Service.Method {
             return [id ?? nil, query?.serialize()]
         }
     }
-    
-}
 
+}
